@@ -127,7 +127,7 @@ def get_info_threaded(url_list):
 
 app = FastAPI()
 
-@app.get("/content")
+@app.get("/")
 async def get_content():
     # print article title of global_list
     print("--------------------------------------------------")
