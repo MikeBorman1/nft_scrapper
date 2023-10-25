@@ -1,0 +1,5 @@
+fastapi
+cloudscraper
+justext
+beautifulsoup4
+uvicorn
