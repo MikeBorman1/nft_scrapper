@@ -2,7 +2,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urlunparse, urljoin
 import datetime
-lock = threading.Lock()
+
 import requests 
 from bs4 import BeautifulSoup
 
@@ -18,7 +18,6 @@ from fastapi import FastAPI
 
 url_list = [
     'https://nftevening.com',
-    'https://nftnow.com',
     'https://playtoearn.online',
     'https://nftnewstoday.com',
     'https://nftculture.com',
@@ -42,6 +41,9 @@ url_list = [
 ]
 
 global_list = []
+lock = threading.Lock()
+thread_finished = False
+
 
 def validate_and_fix_url(url):
     # Checks if the URL is valid
@@ -65,6 +67,8 @@ def get_article_content(url):
     return content
 
 def get_info_from_url(url):
+    global thread_finished
+    
     scraper = cloudscraper.create_scraper()
     response = scraper.get(url).text
     soup = BeautifulSoup(response, 'html.parser')
@@ -73,14 +77,18 @@ def get_info_from_url(url):
 
     # get all links and associated text
     links = soup.find_all('a')
-    potential_articles = {}
+    potential_articles = []
+    processed_urls = set()
     keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service','terms and conditions', 'privacy policy', 'contact', 'youtube.com', '#',"$",
                 'discord', 'sale'
     ]
     
     for link in links:
         link_url = link.get('href')
-        link_url = validate_and_fix_url(link_url)  
+        link_url = validate_and_fix_url(link_url)
+        if link_url in processed_urls:
+            continue
+        processed_urls.add(link_url)
         link_text = link.get_text()
         link_text = link_text.replace('\n', '').replace('\t', '').replace('\r', '')
         
@@ -104,16 +112,17 @@ def get_info_from_url(url):
             if publication_date and publication_date < yesterday:
                 continue
             article_content = get_article_content(link_url)
-            potential_articles[link_url] = [link_text, article_content]
-
+            
+            potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
+    # print(potential_articles)
     with lock:
-        for link_url, article_content in potential_articles.items():
-            global_list.append({link_url: article_content})
+        global_list.extend(potential_articles)
 
-                
     
-    # summary = get_article_summary(text)
-    # print(text)
+
+    thread_finished = True   
+    
+  
     
     
     
@@ -129,9 +138,17 @@ app = FastAPI()
 
 @app.get("/")
 async def get_content():
-    # print article title of global_list
-    print("--------------------------------------------------")
-    get_info_threaded(url_list=url_list)
-    temp = global_list
+    global thread_finished
+    global global_list
+
+    thread_finished = False
     global_list = []
+
+    get_info_threaded(url_list=url_list)
+
+    # Wait for the threads to finish
+    while not thread_finished:
+        pass
+
+    temp = {"items": global_list}
     return temp
