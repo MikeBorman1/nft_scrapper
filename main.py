@@ -131,6 +131,6 @@ app = FastAPI()
 async def get_content():
     # print article title of global_list
     print("--------------------------------------------------")
-    get_info_threaded(url_list=url_list)
-    
-    return global_list
+    temp = get_info_threaded(url_list=url_list)
+    global_list = []
+    return temp
