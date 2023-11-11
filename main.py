@@ -1,12 +1,20 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urlunparse, urljoin
-import datetime
+from datetime import timedelta, datetime
 import requests
 from bs4 import BeautifulSoup
 import cloudscraper
 import justext
+import re
 from fastapi import FastAPI
+from htmldate import find_date
+from requests_html import HTMLSession
+from typing import Optional
+from pydantic import BaseModel
+
+class KeywordsInput(BaseModel):
+    keywords: Optional[str]
 
 MAX_THREADS = 15
 
@@ -97,33 +105,42 @@ def get_info_from_url(url):
                 if any(keyword in link_url.lower() or keyword in link_text.lower() for keyword in keywords):
                     continue
                 
-                # Get article title and content for the link
-                try:
-                    publication_date = soup.find('time')['datetime']
-                    publication_date_str = publication_date.strftime('%Y-%m-%d')
-                except:
-                    publication_date_str = None
-                
                 # Check if the article was published within the last 24 hours
-                
-                now = datetime.datetime.now()
-                yesterday = now - datetime.timedelta(days=1)
-                
-                if publication_date_str and publication_date_str < yesterday:
-                    continue
-                article_content = get_article_content(link_url)
-                if article_content is None:
-                    article_content = ""
-                
+                html_date = find_date(link_url)
+                if html_date:
                     
-                potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
+                    html_date_datetime = datetime.datetime.strptime(html_date, "%Y-%m-%d")
+
+                    now = datetime.datetime.now()
+                    yesterday = now - datetime.timedelta(days=1)
+
+                    # Check if the date of html_date is the same as yesterday
+                    if html_date_datetime.date() >= yesterday.date():
+                        article_content = get_article_content(link_url)
+                        if article_content is None:
+                            continue
+                        
+                            
+                        # potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
+                        potential_articles.append({"url": link_url, "title": link_text, "description": article_content, "date": html_date })
+                    else:
+                        continue
+                else:
+                    pass
+
+                
+                
+                
+
+                
         
         with lock:
             # print(f"Unique articles found in {url}: {len(potential_articles)}")
             global_list.extend(potential_articles)
     
     except Exception as e:
-        print(f"Error processing {url}: {str(e)}")
+        # print(f"Error processing {url}: {str(e)}")
+        pass
     
     finish_event.set()
 
@@ -134,9 +151,48 @@ def get_info_threaded(url_list):
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         executor.map(get_info_from_url, url_list)
 
+
+def get_google_articles(keywords):
+
+    base_url = f'https://news.google.com/rss/search?q={keywords}'
+    s = HTMLSession()
+    r = s.get(base_url)
+    items = r.html.find('item')
+    res_list = []
+
+    for item in items:
+    
+        article_items = re.split(r"\n\n", item.text.strip())
+        now = datetime.utcnow()
+        twenty_four_hours_ago = now - timedelta(hours=24)
+        # Extract information for each article
+        
+        # print(articles)
+        for article_content in article_items:
+            lines = article_content.split('\n')
+            # print(lines)
+            
+        #     # Extract title
+            title = lines[0].strip()
+            
+            # Extract URL link
+            url_link = lines[1].strip()
+            article_content = get_article_content(url_link)
+            if article_content is None:
+                continue
+            
+        #     # Extract date
+            date_str = lines[3]
+            date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %Z').date()
+            # print(type(date))
+            if date >= twenty_four_hours_ago.date():
+                res_list.append({"url": url_link, "title": title, "description": article_content,"date": date_str})
+
+    return res_list  
+
 app = FastAPI()
 
-@app.get("/")
+@app.get("/articles")
 async def get_content():
     global global_list
     global_list = []
@@ -147,3 +203,14 @@ async def get_content():
     
     temp = {"items": global_list}
     return temp
+
+@app.post("/google-articles")
+async def get_articles(keywords_input: KeywordsInput):
+    keywords = keywords_input.keywords
+    
+    if keywords is None:
+        keywords = "nft"
+    
+    results = get_google_articles(keywords)
+    return {"items": results}
+    
