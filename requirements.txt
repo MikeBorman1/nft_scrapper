@@ -3,3 +3,6 @@ cloudscraper
 justext
 beautifulsoup4
 uvicorn
+pytz
+htmldate
+requests-html
