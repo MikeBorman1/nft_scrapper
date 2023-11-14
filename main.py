@@ -1,5 +1,3 @@
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urlunparse, urljoin
 from datetime import timedelta, datetime
 import requests
@@ -12,39 +10,19 @@ from htmldate import find_date
 from requests_html import HTMLSession
 from typing import Optional
 from pydantic import BaseModel
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 
 class KeywordsInput(BaseModel):
     keywords: Optional[str]
 
 MAX_THREADS = 15
 
-url_list = [
-    'https://nftevening.com',
-    'https://nftnow.com',
-    'https://playtoearn.online',
-    'https://nftnewstoday.com',
-    'https://nftculture.com',
-    'https://nftgators.com',
-    'https://todaynftnews.com',
-    'https://decrypt.co/news/nft',
-    'https://cointelegraph.com/tags/nft',
-    'https://www.coindesk.com/tag/nft/',
-    'https://www.coindesk.com/tag/nfts/',
-    'https://thedefiant.io/nfts',
-    'https://www.theblock.co/category/nfts-gaming-and-metaverse',
-    'https://www.bitdegree.org/crypto/news/nfts',
-    'https://coingape.com/category/news/nft-news/',
-    'https://cryptodaily.co.uk/tag/nft',
-    'https://www.thecoinrepublic.com/category/nft/',
-    'https://www.bitcoininsider.org/category/nfts',
-    'https://insidebitcoins.com/',
-    'https://beincrypto.com/news/',
-    'https://blockworks.co/',
-]
+url_list = os.getenv("URL_LIST").split(',')
 
-global_list = []
-lock = threading.Lock()
-finish_event = threading.Event()
 
 def validate_and_fix_url(url, parent_domain):
     # Checks if the URL is valid
@@ -59,11 +37,16 @@ def validate_and_fix_url(url, parent_domain):
         url = 'https://' + url
 
     # Return the fixed URL
-    return url
+    resp = requests.get(url)
+    if resp.status_code == 200:
+        
+        return (url,resp)
+    else:
+        return (None, None)
+  
 
-def get_article_content(url):
+def get_article_content(response):
     try:
-        response = requests.get(url)
         response.raise_for_status()  # Handle HTTP errors
         content = ""
         paragraphs = justext.justext(response.content, justext.get_stoplist("English"))
@@ -76,81 +59,80 @@ def get_article_content(url):
         return str(e)
 
 def get_info_from_url(url):
-    try:
-        parent_domain = urlparse(url).netloc
-        scraper = cloudscraper.create_scraper()
-        response = scraper.get(url).text
-        soup = BeautifulSoup(response, 'html.parser')
-        for script in soup(["script", "style"]):
-            script.decompose()
+    parent_domain = urlparse(url).netloc
+    scraper = cloudscraper.create_scraper()
+    response = scraper.get(url).content
+    soup = BeautifulSoup(response, 'html.parser')
+    for script in soup(["script", "style"]):
+        script.decompose()
+    
+    # get all links and associated text
+    links = soup.find_all('a')
+    
+    potential_articles = []
+    processed_urls = set()
+    keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 'terms and conditions',
+                'privacy policy', 'contact', 'youtube.com', '#', "$", 'discord', 'sale', 'guides','collectibles','category']
+    
+    for link in links:
+        link_url = link.get('href')
+        (link_url, article_resp) = validate_and_fix_url(link_url, parent_domain)
+        if link_url is None:
+            continue 
+        if link_url in processed_urls:
+            continue
         
-        # get all links and associated text
-        links = soup.find_all('a')
-        potential_articles = []
-        processed_urls = set()
-        keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 'terms and conditions',
-                    'privacy policy', 'contact', 'youtube.com', '#', "$", 'discord', 'sale']
+        link_text = link.get_text()
+        link_text = link_text.replace('\n', '').replace('\t', '').replace('\r', '')
         
-        for link in links:
-            link_url = link.get('href')
-            link_url = validate_and_fix_url(link_url, parent_domain)
-            if link_url in processed_urls:
-                continue
-            processed_urls.add(link_url)
-            link_text = link.get_text()
-            link_text = link_text.replace('\n', '').replace('\t', '').replace('\r', '')
+        # Checks if any of the keywords are present in the URL or link text
+        
+        if any(keyword in link_url.lower() for keyword in keywords):
+            continue
+
+        processed_urls.add(link_url)
+        
+        # Check if the article was published within the last 24 hours
+        html_date = find_date(link_url)
+        if html_date:
             
-            # Checks if any of the keywords are present in the URL or link text
-            if len(link_text) > 20:
-                if any(keyword in link_url.lower() or keyword in link_text.lower() for keyword in keywords):
-                    continue
-                
-                # Check if the article was published within the last 24 hours
-                html_date = find_date(link_url)
-                if html_date:
-                    
-                    html_date_datetime = datetime.datetime.strptime(html_date, "%Y-%m-%d")
+            html_date_datetime = datetime.strptime(html_date, "%Y-%m-%d")
 
-                    now = datetime.datetime.now()
-                    yesterday = now - datetime.timedelta(days=1)
+            now = datetime.now()
+            yesterday = now - timedelta(days=1)
+            
+            # print(link_url,html_date_datetime.date(), yesterday.date())
+            # Check if the date of html_date is the same as yesterday
+            if html_date_datetime.date() >= yesterday.date():
+                
+                article_content = get_article_content(article_resp)
+                if article_content is None:
+                    article_content = ""
+                
+                # print(link_url,html_date_datetime.date())
+                # potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
+                potential_articles.append({"url": link_url, "title": link_text, "description": article_content, "date": html_date })
+            
+        else:
+            continue
 
-                    # Check if the date of html_date is the same as yesterday
-                    if html_date_datetime.date() >= yesterday.date():
-                        article_content = get_article_content(link_url)
-                        if article_content is None:
-                            continue
-                        
-                            
-                        # potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
-                        potential_articles.append({"url": link_url, "title": link_text, "description": article_content, "date": html_date })
-                    else:
-                        continue
-                else:
-                    pass
+            
+            
+            
 
-                
-                
-                
-
-                
-        
-        with lock:
-            # print(f"Unique articles found in {url}: {len(potential_articles)}")
-            global_list.extend(potential_articles)
+            
     
-    except Exception as e:
-        # print(f"Error processing {url}: {str(e)}")
-        pass
     
-    finish_event.set()
+    return potential_articles
 
 def get_info_threaded(url_list):
-    num_urls = len(url_list)
-    num_threads = min(num_urls, MAX_THREADS)
-    
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        executor.map(get_info_from_url, url_list)
+    final_list = []
+    for url in url_list:
+        potential_list = get_info_from_url(url)
+        if potential_list:
+            final_list.extend(potential_list)
 
+    return final_list
 
 def get_google_articles(keywords):
 
@@ -179,7 +161,7 @@ def get_google_articles(keywords):
             url_link = lines[1].strip()
             article_content = get_article_content(url_link)
             if article_content is None:
-                continue
+                article_content = ""
             
         #     # Extract date
             date_str = lines[3]
@@ -194,12 +176,8 @@ app = FastAPI()
 
 @app.get("/articles")
 async def get_content():
-    global global_list
-    global_list = []
     
-    finish_event.clear()
-    get_info_threaded(url_list=url_list)
-    finish_event.wait()  # Wait for threads to finish
+    global_list = get_info_threaded(url_list=url_list)
     
     temp = {"items": global_list}
     return temp
