@@ -12,6 +12,7 @@ from typing import Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
+import time
 
 load_dotenv()
 
@@ -23,27 +24,45 @@ MAX_THREADS = 15
 
 url_list = os.getenv("URL_LIST").split(',')
 
+keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 'terms and conditions', 'author', 'contact', 'learn','about-us','contact-us', 'about', 'advertise','marketplaces', 'deals', 'disclosure'
+                'privacy policy', 'contact', '@', '#', "$", 'discord', 'sale', 'guides','collectibles','category','tiktok', 'learn', 'games', 'guide', 'privacy', 'visit', 'cryptocurrency-prices', 'crypto',
+                'twitter','facebook','instagram','linkedin','reddit','medium','youtube','twitch','telegram','github','discord','t.me','sar.asp', 'terms-and-conditions'
+]
+
+def is_valid_url(url):
+    regex = r'^http[s]?://(?:[a-zA-Z]|[0-9]|[._-]|\~|\?|\:|=|%|&|/|(|)){1,256}\.[a-zA-Z]{1,256}\b([-a-zA-Z0-9@:%_\+.~#?&//=]{0,256}\.[a-z]{1,256})?\b(:[0-9]{1,4})?'
+    match = re.match(regex, url)
+    return bool(match)
 
 def validate_and_fix_url(url, parent_domain):
-    # Checks if the URL is valid
+    
+    
+    # Check if the URL starts with 'https://'
+    if url is None:
+        return None, None
+
+    # Check if the URL starts with 'https://'
     if not url.startswith('https://'):
         url = 'https://' + parent_domain + url
 
     # Parse the URL
     parsed_url = urlparse(url)
 
-    # If the URL is missing a scheme, add the scheme `https`
+    # If the URL is missing a scheme, add the scheme 'https'
     if not parsed_url.scheme:
         url = 'https://' + url
-
-    # Return the fixed URL
+    
+    # Send a GET request to the URL and check the response status code
+    if any(keyword in url.lower() for keyword in keywords):
+            return None, None
+    
     resp = requests.get(url)
     if resp.status_code == 200:
-        
-        return (url,resp)
+        print(url)
+        return (url, resp)
     else:
         return (None, None)
-  
+    
 
 def get_article_content(response):
     try:
@@ -71,27 +90,35 @@ def get_info_from_url(url):
     
     potential_articles = []
     processed_urls = set()
-    keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 'terms and conditions',
-                'privacy policy', 'contact', 'youtube.com', '#', "$", 'discord', 'sale', 'guides','collectibles','category']
+    
     
     for link in links:
         link_url = link.get('href')
-        (link_url, article_resp) = validate_and_fix_url(link_url, parent_domain)
-        if link_url is None:
-            continue 
         if link_url in processed_urls:
+            continue 
+        if link is None:
+            continue
+        
+        try:
+            (link_url, article_resp) = validate_and_fix_url(link_url, parent_domain)
+        except Exception as e:
+            # Log the error and continue to the next iteration of the loop
+            print(f'Error processing URL: {link_url}, {e}')
+            continue
+
+        if link_url is None:
             continue
         
         link_text = link.get_text()
         link_text = link_text.replace('\n', '').replace('\t', '').replace('\r', '')
         
+        if len(link_text) == 0:
+            continue
         # Checks if any of the keywords are present in the URL or link text
         
-        if any(keyword in link_url.lower() for keyword in keywords):
-            continue
 
         processed_urls.add(link_url)
-        
+        # print(link_url)
         # Check if the article was published within the last 24 hours
         html_date = find_date(link_url)
         if html_date:
@@ -107,22 +134,14 @@ def get_info_from_url(url):
                 
                 article_content = get_article_content(article_resp)
                 if article_content is None:
-                    article_content = ""
-                
+                    continue
                 # print(link_url,html_date_datetime.date())
                 # potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
                 potential_articles.append({"url": link_url, "title": link_text, "description": article_content, "date": html_date })
             
         else:
-            continue
-
+            continue       
             
-            
-            
-
-            
-    
-    
     return potential_articles
 
 def get_info_threaded(url_list):
