@@ -59,7 +59,12 @@ def validate_and_fix_url(url, parent_domain):
     if any(keyword in url.lower() for keyword in keywords):
             return None, None
     
-    
+    try:
+        resp = requests.get(url)
+    except requests.exceptions.InvalidSchema:
+        # Skip the URL if the schema is invalid
+        print(f'Invalid schema for URL: {url}')
+        return None, None
     
     resp = requests.get(url)
     if resp.status_code == 200:
