@@ -12,7 +12,7 @@ from typing import Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-import time
+
 
 load_dotenv()
 
@@ -59,12 +59,7 @@ def validate_and_fix_url(url, parent_domain):
     if any(keyword in url.lower() for keyword in keywords):
             return None, None
     
-    try:
-        resp = requests.get(url)
-    except requests.exceptions.InvalidSchema:
-        # Skip the URL if the schema is invalid
-        print(f'Invalid schema for URL: {url}')
-        return None, None
+    
     
     resp = requests.get(url)
     if resp.status_code == 200:
@@ -89,7 +84,7 @@ def get_article_content(response):
 def get_info_from_url(url):
     parent_domain = urlparse(url).netloc
     scraper = cloudscraper.create_scraper()
-    response = scraper.get(url).content
+    response = scraper.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10).content
     soup = BeautifulSoup(response, 'html.parser')
     for script in soup(["script", "style"]):
         script.decompose()
@@ -187,7 +182,7 @@ def get_google_articles(keywords):
             
             # Extract URL link
             url_link = lines[1].strip()
-            article_resp = requests.get(url_link)
+            article_resp = requests.get(url_link, stream=True)
             article_content = get_article_content(article_resp)
             if article_content is None:
                 article_content = ""
