@@ -23,10 +23,11 @@ class KeywordsInput(BaseModel):
 MAX_THREADS = 15
 
 url_list = os.getenv("URL_LIST").split(',')
+test_url = 'https://nftevening.com'
 
 keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 'terms and conditions', 'author', 'contact', 'learn','about-us','contact-us', 'about', 'advertise','marketplaces', 'deals', 'disclosure'
                 'privacy policy', 'contact', '@', '#', "$", 'discord', 'sale', 'guides','collectibles','category','tiktok', 'learn', 'games', 'guide', 'privacy', 'visit', 'cryptocurrency-prices', 'crypto',
-                'twitter','facebook','instagram','linkedin','reddit','medium','youtube','twitch','telegram','github','discord','t.me','sar.asp', 'terms-and-conditions'
+                'twitter','facebook','instagram','linkedin','reddit','medium','youtube','twitch','telegram','github','discord','t.me','sar.asp', 'terms-and-conditions', 'sponsors',
 ]
 
 def is_valid_url(url):
@@ -52,13 +53,16 @@ def validate_and_fix_url(url, parent_domain):
     if not parsed_url.scheme:
         url = 'https://' + url
     
+    if not is_valid_url(url):
+        return None, None
     # Send a GET request to the URL and check the response status code
     if any(keyword in url.lower() for keyword in keywords):
             return None, None
     
+    
+    
     resp = requests.get(url)
     if resp.status_code == 200:
-        print(url)
         return (url, resp)
     else:
         return (None, None)
@@ -66,7 +70,7 @@ def validate_and_fix_url(url, parent_domain):
 
 def get_article_content(response):
     try:
-        response.raise_for_status()  # Handle HTTP errors
+        # Handle HTTP errors
         content = ""
         paragraphs = justext.justext(response.content, justext.get_stoplist("English"))
         for paragraph in paragraphs:
@@ -112,7 +116,7 @@ def get_info_from_url(url):
         link_text = link.get_text()
         link_text = link_text.replace('\n', '').replace('\t', '').replace('\r', '')
         
-        if len(link_text) == 0:
+        if len(link_text) <= 10:
             continue
         # Checks if any of the keywords are present in the URL or link text
         
@@ -131,7 +135,7 @@ def get_info_from_url(url):
             # print(link_url,html_date_datetime.date(), yesterday.date())
             # Check if the date of html_date is the same as yesterday
             if html_date_datetime.date() >= yesterday.date():
-                
+                print(link_url)
                 article_content = get_article_content(article_resp)
                 if article_content is None:
                     continue
@@ -150,7 +154,7 @@ def get_info_threaded(url_list):
         potential_list = get_info_from_url(url)
         if potential_list:
             final_list.extend(potential_list)
-
+    # final_list = get_info_from_url(test_url)
     return final_list
 
 def get_google_articles(keywords):
@@ -178,10 +182,12 @@ def get_google_articles(keywords):
             
             # Extract URL link
             url_link = lines[1].strip()
-            article_content = get_article_content(url_link)
+            article_resp = requests.get(url_link)
+            article_content = get_article_content(article_resp)
             if article_content is None:
                 article_content = ""
-            
+            if "403 Client Error" in article_content:
+                article_content = ""
         #     # Extract date
             date_str = lines[3]
             date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %Z').date()
