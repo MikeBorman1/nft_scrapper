@@ -12,6 +12,9 @@ from typing import Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
+import threading
+import concurrent.futures 
+from queue import Queue
 
 
 load_dotenv()
@@ -22,12 +25,20 @@ class KeywordsInput(BaseModel):
 
 MAX_THREADS = 15
 
-url_list = os.getenv("URL_LIST").split(',')
-test_url = 'https://nftevening.com'
+global_results = []
+results_lock = threading.Lock()
 
-keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 'terms and conditions', 'author', 'contact', 'learn','about-us','contact-us', 'about', 'advertise','marketplaces', 'deals', 'disclosure'
-                'privacy policy', 'contact', '@', '#', "$", 'discord', 'sale', 'guides','collectibles','category','tiktok', 'learn', 'games', 'guide', 'privacy', 'visit', 'cryptocurrency-prices', 'crypto',
-                'twitter','facebook','instagram','linkedin','reddit','medium','youtube','twitch','telegram','github','discord','t.me','sar.asp', 'terms-and-conditions', 'sponsors',
+skip_url = ["https://www.coindesk.com/newsletters/the-protocol/", "https://news.google.com/publications/"]
+
+keywords = [
+    'learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 
+    'terms and conditions', 'author', 'contact', 'learn', 'about-us', 'contact-us', 
+    'about', 'advertise', 'marketplaces', 'deals', 'disclosure', 'privacy policy', 
+    'contact', '@', '#', "$", 'discord', 'sale', 'guides', 'collectibles', 'category', 
+    'tiktok', 'learn', 'guide', 'privacy', 'visit', 'cryptocurrency-prices', 'cookie-policy',
+    'crypto', 'policies', 'policy', 'twitter', 'facebook', 'instagram', 'linkedin', 
+    'reddit', 'medium', 'youtube', 'twitch', 'telegram', 'github', 'discord', 't.me', 
+    'sar.asp', 'terms-and-conditions', 'sponsors',
 ]
 
 def is_valid_url(url):
@@ -98,6 +109,8 @@ def get_info_from_url(url):
     
     for link in links:
         link_url = link.get('href')
+        if any(skipable_url in link_url for skipable_url in skip_url):
+            continue
         if link_url in processed_urls:
             continue 
         if link is None:
@@ -135,10 +148,11 @@ def get_info_from_url(url):
             # print(link_url,html_date_datetime.date(), yesterday.date())
             # Check if the date of html_date is the same as yesterday
             if html_date_datetime.date() >= yesterday.date():
-                print(link_url)
+                
                 article_content = get_article_content(article_resp)
                 if article_content is None:
                     continue
+                print(link_url)
                 # print(link_url,html_date_datetime.date())
                 # potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
                 potential_articles.append({"url": link_url, "title": link_text, "description": article_content, "date": html_date })
@@ -202,10 +216,30 @@ app = FastAPI()
 @app.get("/articles")
 async def get_content():
     
-    global_list = get_info_threaded(url_list=url_list)
+    # global_list = get_info_threaded(url_list=url_list)
+    # temp = {"items": global_list}
+    # return temp
     
-    temp = {"items": global_list}
-    return temp
+    url_list = os.getenv("URL_LIST").split(',')
+
+    with results_lock:
+        
+        if not global_results:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future_to_url = {executor.submit(get_info_from_url, url): url for url in url_list}
+                for future in concurrent.futures.as_completed(future_to_url):
+                    url = future_to_url[future]
+                    try:
+                        result = future.result()
+                        global_results.extend(result)  # Extend global_results with the contents of result
+                    except Exception as e:
+                        print(f"Error processing {url}: {e}")
+
+        # Return a copy of global_results and clear it after retrieval
+        results_copy = global_results.copy()
+        global_results.clear()
+        return {"items":results_copy}
+
 
 @app.post("/google-articles")
 async def get_articles(keywords_input: KeywordsInput):
