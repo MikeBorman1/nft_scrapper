@@ -15,6 +15,10 @@ from typing import Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
+import logging
+import urllib
+import asyncio
+import aiohttp
 
 load_dotenv()
 
@@ -24,30 +28,38 @@ class KeywordsInput(BaseModel):
 
 MAX_THREADS = 15
 
+# temp_url_list = ['https://nftnewstoday.com/']
 url_list = os.getenv("URL_LIST").split(',')
 global_list = []
 lock = threading.Lock()
-finish_event = threading.Event()
+# finish_event = threading.Event()
 
 def validate_and_fix_url(url, parent_domain):
-    # Checks if the URL is valid
-    if not url.startswith('https://'):
-        url = 'https://' + parent_domain + url
+    try:
+        parsed_url = urllib.parse.urlparse(url)
 
-    # Parse the URL
-    parsed_url = urlparse(url)
+        # Check for valid scheme and hostname
+        if not parsed_url.scheme or not parsed_url.netloc:
+            return None, None  # Skip invalid URLs
 
-    # If the URL is missing a scheme, add the scheme `https`
-    if not parsed_url.scheme:
-        url = 'https://' + url
+        # Fix missing scheme
+        if not parsed_url.scheme:
+            url = 'https://' + url
 
-    # Return the fixed URL
-    resp = requests.get(url)
-    if resp.status_code == 200:
-        
-        return (url,resp)
-    else:
-        return (None, None)
+        # Handle relative URLs
+        if not parsed_url.netloc:
+            url = urllib.parse.urljoin(parent_domain, url)
+
+        # Check for successful response
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            return url, resp
+        else:
+            return None, None  # Skip URLs with non-200 status codes
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error processing URL {url}: {e}")
+        return None, None 
   
 
 def get_article_content(response):
@@ -63,8 +75,10 @@ def get_article_content(response):
         # print(e)
         return str(e)
 
+# async def get_info_from_url(url, session):
+
 def get_info_from_url(url):
-    
+    # print(url)
     parent_domain = urlparse(url).netloc
     scraper = cloudscraper.create_scraper()
     response = scraper.get(url).content
@@ -77,27 +91,35 @@ def get_info_from_url(url):
     
     potential_articles = []
     processed_urls = set()
-    keywords = ['learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 'terms and conditions',
-                'privacy policy', 'contact', 'youtube.com', '#', "$", 'discord', 'sale', 'guides','collectibles','category']
-    time.sleep(5)
+    keywords = [
+        'learn', 'index', 'indices', '/price/', 'subscribe', 'terms of service', 
+        'terms and conditions', 'author', 'contact', 'learn', 'about-us', 'contact-us', 
+        'about', 'advertise', 'marketplaces', 'deals', 'disclosure', 'privacy policy', 
+        'contact', '@', '#', "$", 'discord', 'sale', 'guides', 'collectibles', 'category', 
+        'tiktok', 'learn', 'guide', 'privacy', 'visit', 'cryptocurrency-prices', 'cookie-policy',
+        'crypto', 'policies', 'policy', 'twitter', 'facebook', 'instagram', 'linkedin', 
+        'reddit', 'medium', 'youtube', 'twitch', 'telegram', 'github', 'discord', 't.me', 
+        'sar.asp', 'terms-and-conditions', 'sponsors',
+    ]
+    # time.sleep(5)
     for link in links:
         link_url = link.get('href')
+        
         (link_url, article_resp) = validate_and_fix_url(link_url, parent_domain)
-        if link_url is None:
-            continue 
-        if link_url in processed_urls:
+
+        if link_url is None or link_url in processed_urls or any(keyword in link_url.lower() for keyword in keywords):
             continue
         
+        print(link_url)
         link_text = link.get_text()
         link_text = link_text.replace('\n', '').replace('\t', '').replace('\r', '')
         
         # Checks if any of the keywords are present in the URL or link text
         
-        if any(keyword in link_url.lower() for keyword in keywords):
-            continue
+       
 
         processed_urls.add(link_url)
-        print(link_url)
+        # print(link_url)
         
         # Check if the article was published within the last 24 hours
         html_date = find_date(link_url)
@@ -116,34 +138,40 @@ def get_info_from_url(url):
                 if article_content is None:
                     article_content = ""
                 
-                print(link_url,html_date_datetime.date())
+                # print(link_url,html_date_datetime.date())
                 # potential_articles.append({"url": link_url, "title": link_text, "description": article_content})
                 potential_articles.append({"url": link_url, "title": link_text, "description": article_content, "date": html_date })
+                # print(potential_articles)
             
         else:
             continue
     
-    with lock:
-        global_list.extend(potential_articles)
-        time.sleep(1)
+
+    print(potential_articles)
+    return potential_articles
+    # with lock:
+        # print(len(potential_articles))
+    # global_list.extend(potential_articles)
+        # print(global_list)
+        # time.sleep(1)
+
+    
 
 
-
-    finish_event.set()
+    
 
 def get_info_threaded(url_list):
-    # final_list = []
-    # print(url_list)
-    # for url in url_list:
-    #     potential_list = get_info_from_url(url)
-    #     if potential_list:
-    #         final_list.extend(potential_list)
-
-    # return final_list
-    num_threads = len(url_list)
+   
+    # with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+    #     futures = [executor.submit(get_info_from_url, url) for url in url_list]
+    #     # Wait for all threads to complete
+    #     for future in futures:
+    #         future.result()
+    temp = []
+    for url in url_list:
+        temp.extend(get_info_from_url(url))
     
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        executor.map(get_info_from_url, url_list)
+    return temp
 
 def get_google_articles(keywords):
 
@@ -189,17 +217,17 @@ app = FastAPI()
 
 @app.get("/articles")
 async def get_content():
-    global global_list
-    global_list = []
+#   global global_list
+  global_list = get_info_threaded(url_list)
 
-    finish_event.clear()
-    get_info_threaded(url_list=url_list)
-    finish_event.wait() 
-    
-    # global_list = get_info_threaded(url_list=url_list)
-    
-    temp = {"items": global_list}
-    return temp
+
+
+#   async with aiohttp.ClientSession() as session:  # Use aiohttp for async requests
+#     tasks = [asyncio.create_task(get_info_from_url(url, session)) for url in url_list]
+#     await asyncio.gather(*tasks)  # Gather results asynchronously
+
+  temp = {"items": global_list}
+  return temp
 
 @app.post("/google-articles")
 async def get_articles(keywords_input: KeywordsInput):
