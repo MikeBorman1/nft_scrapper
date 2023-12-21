@@ -7,3 +7,4 @@ pytz
 htmldate
 requests-html
 python-dotenv
+asyncio
