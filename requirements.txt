@@ -8,3 +8,4 @@ htmldate
 requests-html
 python-dotenv
 asyncio
+aiohttp
