@@ -160,10 +160,11 @@ def get_info_from_url(url):
     # print(potential_articles)
     # return potential_articles
     with lock:
-        print(f"Done for: {url}")
+        # print(f"Done for: {url}")
         print(len(potential_articles))
         global_list.extend(potential_articles)
-        
+        # print(global_list)
+        # time.sleep(1)
 
 
 def get_info_threaded(url_list):
@@ -172,47 +173,66 @@ def get_info_threaded(url_list):
         futures = [executor.submit(get_info_from_url, url) for url in url_list]
         # Wait for all threads to complete
         wait(futures)
-       
+        
+
+def fetch_article_content(url):
+    try:
+        # Set a timeout of 5 seconds for the request
+        article_resp = requests.get(url, verify=False, timeout=5)
+        article_content = get_article_content(article_resp)
+        if article_content is None:
+            article_content = ""
+        return article_content
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching content for {url}: {e}")
+        return ""
+
+def process_item(item, twenty_four_hours_ago):
+    article_items = re.split(r"\n\n", item.text.strip())
+
+    res_list = []
+
+    for article_content in article_items:
+        lines = article_content.split('\n')
+
+        date_str = lines[3]
+        date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %Z').date()
+
+        if date >= twenty_four_hours_ago.date():
+            title = lines[0].strip()
+            url_link = lines[1].strip()
+            
+            # Use fetch_article_content function with timeout
+            article_content = fetch_article_content(url_link)
+            if article_content is None:
+                continue
+
+            res_list.append({"url": url_link, "title": title, "description": article_content, "date": date_str})
+
+    return res_list
 
 def get_google_articles(keywords):
-
     base_url = f'https://news.google.com/rss/search?q={keywords}'
     s = HTMLSession()
     r = s.get(base_url)
     items = r.html.find('item')
     res_list = []
 
-    for item in items:
+    now = datetime.utcnow()
+    twenty_four_hours_ago = now - timedelta(hours=24)
 
-        article_items = re.split(r"\n\n", item.text.strip())
-        now = datetime.utcnow()
-        twenty_four_hours_ago = now - timedelta(hours=24)
-        # Extract information for each article
-        
-        # print(articles)
-        for article_content in article_items:
-            lines = article_content.split('\n')
+    # Process items in parallel
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        for item in items:
+            future = executor.submit(process_item, item, twenty_four_hours_ago)
+            futures.append(future)
 
-            date_str = lines[3]
-            date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %Z').date()
-            # print(type(date))
-            if date >= twenty_four_hours_ago.date():
-            
-            
-            # Extract title
-                title = lines[0].strip()
-                
-                # Extract URL link
-                url_link = lines[1].strip()
-                article_resp = requests.get(url_link)
-                article_content = get_article_content(article_resp)
-                if article_content is None:
-                    article_content = ""
-                
-            # Extract date
-                res_list.append({"url": url_link, "title": title, "description": article_content,"date": date_str})
+        # Gather results from parallel tasks
+        for future in futures:
+            res_list.extend(future.result())
 
-    return res_list  
+    return res_list 
 
 app = FastAPI()
 
@@ -223,8 +243,13 @@ async def get_content():
   global_list = [] 
   get_info_threaded(url_list)
   print(global_list)
-  temp = {"items": global_list}
 
+#   async with aiohttp.ClientSession() as session:  # Use aiohttp for async requests
+#     tasks = [asyncio.create_task(get_info_from_url(url, session)) for url in url_list]
+#     await asyncio.gather(*tasks)  # Gather results asynchronously
+
+  temp = {"items": global_list}
+#   global_list.clear()
   return temp
 
 @app.post("/google-articles")
@@ -234,6 +259,8 @@ async def get_articles(keywords_input: KeywordsInput):
     if keywords is None:
         keywords = "nft"
     
-    results = get_google_articles(keywords)
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, get_google_articles, keywords)
     return {"items": results}
+    
     
