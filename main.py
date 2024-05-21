@@ -257,7 +257,7 @@ async def get_articles(keywords_input: KeywordsInput):
     keywords = keywords_input.keywords
     
     if keywords is None:
-        keywords = "nft"
+        keywords = "marijuana"
     
     loop = asyncio.get_event_loop()
     results = await loop.run_in_executor(None, get_google_articles, keywords)
